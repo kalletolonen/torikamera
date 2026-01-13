@@ -57,6 +57,26 @@ We rip the live stream directly to getting training data.
 
 **Output**: High-quality JPGs in `data/raw/`.
 
+To go back in time (up to 12 hours):
+
+**Mac/Linux:**
+
+```bash
+python3 get_data.py --history 1 6 11 --limit 5
+```
+
+**Windows:**
+
+```powershell
+python get_data.py --history 1 6 11 --limit 5
+```
+
+_Timeline:_
+
+- `--history 1`: 1 Hour ago.
+- `--history 6`: 6 Hours ago.
+- `--history 11`: 11 Hours ago (Early morning).
+
 ### Phase 2: The Grunt Work (Labeling) 🏷️
 
 **Philosophy**: "The model is only as smart as the teacher. Be a strict teacher."

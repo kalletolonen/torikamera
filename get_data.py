@@ -4,7 +4,8 @@ import time
 import os
 import yt_dlp
 import sys
-from datetime import datetime
+import subprocess
+from datetime import datetime, timedelta
 
 import requests
 import re
@@ -80,20 +81,16 @@ def get_stream_url(url):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            return info['url']
+            return info['url'], url # Return both stream URL and the resolved YouTube URL
     except Exception as e:
         print(f"Error extracting stream URL: {e}", file=sys.stderr)
-        return None
+        return None, url
 
 
-def extract_frames(stream_url, limit, interval, output_dir):
+def extract_frames_live(stream_url, limit, interval, output_dir):
     """
-    Captures frames from the stream at the specified interval.
+    Captures frames from the LIVE stream at the specified interval.
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        print(f"Created output directory: {output_dir}")
-
     cap = cv2.VideoCapture(stream_url)
     if not cap.isOpened():
         print("Error: Could not open video stream.", file=sys.stderr)
@@ -102,7 +99,7 @@ def extract_frames(stream_url, limit, interval, output_dir):
     frames_saved = 0
     last_capture_time = 0
     
-    print(f"Starting capture. Target: {limit} frames. Interval: {interval}s.")
+    print(f"Starting LIVE capture. Target: {limit} frames. Interval: {interval}s.")
     
     try:
         while frames_saved < limit:
@@ -119,7 +116,7 @@ def extract_frames(stream_url, limit, interval, output_dir):
                     continue
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = os.path.join(output_dir, f"torikamera_{timestamp}.jpg")
+                filename = os.path.join(output_dir, f"torikamera_{timestamp}_live.jpg")
                 
                 cv2.imwrite(filename, frame)
                 print(f"Saved {filename} ({frames_saved + 1}/{limit})")
@@ -127,32 +124,132 @@ def extract_frames(stream_url, limit, interval, output_dir):
                 frames_saved += 1
                 last_capture_time = current_time
             
-            # Small sleep to avoid burning CPU, but distinct from the capture interval
-            # We need to read frames often to keep the buffer fresh, so we don't just sleep for `interval`.
-            # Actually, for live streams, if we don't read, the buffer fills up and we get old frames.
-            # So we should run the loop tight but only save when interval passes.
-            # However, `cap.read()` is blocking usually to the frame rate.
-            
     except KeyboardInterrupt:
         print("\nStopping capture...")
     finally:
         cap.release()
         print(f"Done. Saved {frames_saved} frames to {output_dir}")
 
+def extract_frames_history(youtube_url, history_hours, limit, duration, output_dir):
+    """
+    Uses streamlink to download segments from the past and extract frames.
+    """
+    print(f"Starting HISTORY capture. Offsets: {history_hours} hours ago.")
+    
+    # Calculate offset logic
+    # streamlink --hls-start-offset HH:MM:SS (from end if live)
+    for hours_ago in history_hours:
+        print(f"--- Processing: {hours_ago} hours ago ---")
+        
+        # Convert hours to HH:MM:SS
+        td = timedelta(hours=hours_ago)
+        # Handle cases > 24h just in case (though HLS window is usually only 12h)
+        total_seconds = int(td.total_seconds())
+        h = total_seconds // 3600
+        m = (total_seconds % 3600) // 60
+        s = total_seconds % 60
+        offset_str = f"{h:02}:{m:02}:{s:02}"
+        
+        # Approximate timestamp for filename
+        past_time = datetime.now() - td
+        timestamp_str = past_time.strftime("%Y%m%d_%H%M%S")
+        
+        temp_video = os.path.join(output_dir, f"temp_{timestamp_str}.ts")
+        
+        # Streamlink command
+        # --hls-start-offset: Amount of time to skip from the beginning of the stream. 
+        # For live streams, this is a negative offset from the end of the stream.
+        # But streamlink syntax for negative offset uses the same value, just implies it for live.
+        # Wait, typically standard streamlink needs explicit negative for some inputs, but for --hls-start-offset it says:
+        # "For live streams, this is a negative offset from the end of the stream."
+        # This implies we pass positive duration "02:00:00" and it goes back 2 hours.
+        
+        # Streamlink command needs to point to the venv executable if possible, or just "streamlink" if in path.
+        # Since we are running via venv python, we can try to find streamlink in the same bin dir.
+        venv_bin = os.path.dirname(sys.executable)
+        streamlink_exe = os.path.join(venv_bin, "streamlink")
+        if not os.path.exists(streamlink_exe):
+             # Fallback to assumming it's in path
+             streamlink_exe = "streamlink"
+
+        cmd = [
+            streamlink_exe,
+            "--hls-start-offset", offset_str,
+            "--hls-duration", str(duration),
+            "-o", temp_video,
+            youtube_url,
+            "best"
+        ]
+        
+        print(f"Downloading clip (Offset: {offset_str}, Duration: {duration}s)...")
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to download segment: {e}")
+            continue
+            
+        if not os.path.exists(temp_video):
+            print("Download failed, temp file not found.")
+            continue
+            
+        # Extract frames from temp video
+        cap = cv2.VideoCapture(temp_video)
+        frames_extracted = 0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+             print("Could not read video file stats.")
+             cap.release()
+             os.remove(temp_video)
+             continue
+             
+        # Distribute extraction evenly across the clip
+        step = max(1, total_frames // limit)
+        
+        for i in range(limit):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            filename = os.path.join(output_dir, f"torikamera_{timestamp_str}_h{int(hours_ago)}h_f{i}.jpg")
+            cv2.imwrite(filename, frame)
+            print(f"Saved {filename}")
+            frames_extracted += 1
+            
+        cap.release()
+        os.remove(temp_video) # Cleanup
+        print(f"Extracted {frames_extracted} frames from {hours_ago} hours ago.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Torkamera Stream Ripper")
     parser.add_argument("--url", default="https://torilive.fi/", help="URL of the stream source")
     parser.add_argument("--limit", type=int, default=50, help="Number of frames to capture")
-    parser.add_argument("--interval", type=int, default=5, help="Seconds between captures")
+    parser.add_argument("--interval", type=int, default=5, help="Seconds between captures (Live mode)")
     parser.add_argument("--output", default="data/raw", help="Directory to save frames")
+    
+    # Time Travel Arguments
+    parser.add_argument("--history", type=float, nargs='+', help="List of hour offsets to scrape from past (e.g. 0.5 2 12)")
+    parser.add_argument("--duration", type=int, default=10, help="Duration in seconds to download for historical clips")
     
     args = parser.parse_args()
     
-    stream_url = get_stream_url(args.url)
+    if not os.path.exists(args.output):
+        os.makedirs(args.output)
+
+    # Resolve URL
+    stream_url, youtube_url = get_stream_url(args.url)
     if not stream_url:
         sys.exit(1)
-        
-    extract_frames(stream_url, args.limit, args.interval, args.output)
+
+    if args.history:
+        # History Mode (Streamlink)
+        # We need the YouTube URL, not the resolved HLS URL for streamlink (usually)
+        # because streamlink handles the HLS resolution and seeking itself.
+        extract_frames_history(youtube_url, args.history, args.limit, args.duration, args.output)
+    else:
+        # Live Mode (CV2)
+        extract_frames_live(stream_url, args.limit, args.interval, args.output)
 
 if __name__ == "__main__":
     main()
