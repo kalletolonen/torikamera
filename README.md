@@ -21,6 +21,7 @@ We rip the live stream directly to getting training data.
    python3 -m venv venv
    source venv/bin/activate
    pip install -r requirements.txt
+   playwright install chromium
    ```
 
    **Windows:**
@@ -29,6 +30,7 @@ We rip the live stream directly to getting training data.
    python -m venv venv
    .\venv\Scripts\activate
    pip install -r requirements.txt
+   playwright install chromium
    ```
 
 2. **Run Tests**:
@@ -37,79 +39,43 @@ We rip the live stream directly to getting training data.
    ```
 3. **Run the Heist**:
 
-   **Mac/Linux:**
+   **Live Data (Streamlink/CV2):**
 
    ```bash
    python3 get_data.py --limit 100 --interval 5
    ```
 
-   **Windows:**
+   **Historical Data (Headless Browser):**
 
-   ```powershell
-   python get_data.py --limit 100 --interval 5
+   ```bash
+   python get_data.py --history 6.0 12.0 --limit 10
    ```
 
    _Arguments:_
 
-   - `--limit`: Number of frames to capture (default: 50).
-   - `--interval`: Seconds between frames (default: 5).
-   - `--url`: (Optional) Direct YouTube URL if `torilive.fi` parsing fails.
+   - `--limit`: Number of frames to capture.
+   - `--interval`: Seconds between frames (Live mode only).
+   - `--history`: Hours ago to extract from (e.g., `6.0` for 6 hours ago). Accepts multiple values.
 
-**Output**: High-quality JPGs in `data/raw/`.
-
-To go back in time (up to 12 hours):
-
-**Mac/Linux:**
-
-```bash
-python3 get_data.py --history 1 6 11 --limit 5
-```
-
-**Windows:**
-
-```powershell
-python get_data.py --history 1 6 11 --limit 5
-```
-
-_Timeline:_
-
-- `--history 1`: 1 Hour ago.
-- `--history 6`: 6 Hours ago.
-- `--history 11`: 11 Hours ago (Early morning).
-
-### Phase 2: The Grunt Work (Labeling) 🏷️
-
-**Philosophy**: "The model is only as smart as the teacher. Be a strict teacher."
-We use Roboflow to hand-label the data.
-
-1. **Upload**: Push `data/raw/*.jpg` to a new Roboflow project.
-2. **Classes**:
-   - `Pedestrian` (Walking)
-   - `Cyclist` (Riding bike/scooter)
-   - `Bus` (Föli yellow buses)
-3. **Annotate**: Draw tight boxes. This is a top-down view, so boxes will be square-ish.
-4. **Export**: Format `YOLOv8`.
-
-### Phase 3: The Magic (Transfer Learning) 🧠
-
-**Philosophy**: "Don't be a hero. Transfer learn."
-We take a brain that knows what a "dog" is and teach it what a "Finn from above" is.
-
-**Training Command:**
-
-```bash
-yolo task=detect \
-     mode=train \
-     model=yolov8n.pt \
-     data=path/to/data.yaml \
-     epochs=50 \
-     imgsz=640
-```
-
-_Using `yolov8n.pt` (Nano) for max speed._
+**Output**: High-quality Full-HD JPGs in `data/raw/` (approx 150KB-200KB each).
 
 ---
 
-### Phase 4: Stretch goal
+## Project Maintenance and Future Use
 
-Draw a live heatmap on live video of tårgets moving (pedestrians, bikes & buses)
+### Modifying the Script
+
+The core logic for scraping is in `get_data.py`.
+
+- **Dependencies**: The script uses `playwright` (headless browser) to extract historical frames, bypassing YouTube's API restrictions and providing a visual capture.
+- **Nuclear CSS Strategy**: The script injects aggressive CSS and uses a `setInterval` loop to force the YouTube player to full-screen and hide all overlays (search bar, sidebar, gradients).
+- **Element-Level Capture**: Screenshots are taken of the `<video>` tag directly, ensuring no white borders or page layout artifacts.
+- **Robustness**: The script automatically handles:
+  - Cookie consent popups ("Hylkää kaikki").
+  - Buffering timeouts (auto-reloads page if stream stalls).
+
+### Troubleshooting
+
+- **Buffering Timeouts**: If the script is stuck on "Waiting for video to buffer", it will automatically reload the page after 30 seconds and retry.
+- **Black Frames**: If frames are ~20KB and black, it means the stream hadn't loaded. Rerun the script for that specific hour offset.
+- **Headless Issues**: If extraction fails, try running non-headless (modify `get_data.py` `headless=False`) to see what the browser is doing.
