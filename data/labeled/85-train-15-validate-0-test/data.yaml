@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Bus']
+
+roboflow:
+  workspace: trget
+  project: target-tso4q
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/trget/target-tso4q/dataset/2
