@@ -31,7 +31,7 @@ YOUTUBE_URL = "https://www.youtube.com/watch?v=F7SDNtc5waU"
 PROCESS_EVERY_N_FRAMES = 1
 
 # Detection confidence threshold for bus model
-BUS_CONFIDENCE_THRESHOLD = 0.40
+BUS_CONFIDENCE_THRESHOLD = 0.10
 
 # Path to custom-trained bus detection model
 BUS_MODEL_PATH = "models/best.pt"
@@ -150,14 +150,17 @@ class StreamBuffer:
 # YOLO Detection Loop
 # =============================================================================
 
-def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS) -> None:
+def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_local_file: bool = False) -> None:
     """
     Run real-time YOLO bus detection on a video stream.
     
     Args:
         stream_url: Direct URL to video stream
         buffer_seconds: Seconds of video to buffer before playback
+        is_local_file: True if using local file, False if using live stream
     """
+    source_label = "LOCAL FILE" if is_local_file else "LIVE STREAM"
+    print(f"Source: {source_label}")
     print(f"Starting YOLO with {buffer_seconds}s buffer...")
 
     # Initialize stream buffer
@@ -248,6 +251,17 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS) -> N
             (255, 0, 0), 
             3
         )
+        
+        # Show source type (local file vs live stream)
+        cv2.putText(
+            display_frame,
+            source_label,
+            (10, 100),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 255) if is_local_file else (0, 255, 0),
+            2
+        )
 
         cv2.imshow("Torikamera YOLO", display_frame)
 
@@ -272,10 +286,23 @@ def parse_args():
         default=DEFAULT_BUFFER_SECONDS,
         help=f"Buffer size in seconds (default: {DEFAULT_BUFFER_SECONDS})"
     )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Path to video file to use instead of live stream"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    stream_url = get_stream_url(YOUTUBE_URL)
-    if stream_url:
-        run_yolo(stream_url, args.buffer)
+    
+    # Determine stream source: File or YouTube URL
+    if args.source:
+        print(f"Using local file as source: {args.source}")
+        run_yolo(args.source, 0, is_local_file=True)
+    else:
+        print("Using live stream from YouTube")
+        stream_url = get_stream_url(YOUTUBE_URL)
+        if stream_url:
+            run_yolo(stream_url, args.buffer, is_local_file=False)
