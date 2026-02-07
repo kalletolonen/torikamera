@@ -15,6 +15,11 @@ import time
 import yt_dlp
 from ultralytics import YOLO
 
+import argparse
+import queue
+import threading
+import sys
+
 # =============================================================================
 # Configuration Constants
 # =============================================================================
@@ -30,6 +35,9 @@ BUS_CONFIDENCE_THRESHOLD = 0.40
 
 # Path to custom-trained bus detection model
 BUS_MODEL_PATH = "models/best.pt"
+
+# Default buffer size in seconds
+DEFAULT_BUFFER_SECONDS = 5
 
 
 # =============================================================================
@@ -69,27 +77,97 @@ def get_stream_url(youtube_url: str) -> str | None:
 
 
 # =============================================================================
+# Stream Buffering
+# =============================================================================
+
+class StreamBuffer:
+    """
+    Threaded frame reader to buffer video frames.
+    
+    Reads frames in a separate thread and puts them into a queue to smooth out
+    network jitter during playback.
+    """
+    def __init__(self, stream_url: str, buffer_seconds: int = 5):
+        self.stream_url = stream_url
+        self.buffer_seconds = buffer_seconds
+        
+        # Open stream to get FPS
+        self.cap = cv2.VideoCapture(stream_url)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Could not open stream: {stream_url}")
+            
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        if self.fps <= 0:
+            self.fps = 30 # Fallback default
+            
+        self.buffer_size = int(self.fps * buffer_seconds)
+        self.queue = queue.Queue(maxsize=self.buffer_size * 2) # Allow some headroom
+        self.running = False
+        self.thread = None
+        self.lock = threading.Lock()
+
+    def start(self):
+        """Start the frame reading thread."""
+        self.running = True
+        self.thread = threading.Thread(target=self._update, daemon=True)
+        self.thread.start()
+        print(f"Buffering logic started. Buffer duration: {self.buffer_seconds}s ({self.buffer_size} frames)")
+
+    def _update(self):
+        """Internal loop to read frames and put them into queue."""
+        while self.running:
+            if not self.queue.full():
+                ret, frame = self.cap.read()
+                if not ret:
+                    # Stream ended or error
+                    self.running = False
+                    break
+                self.queue.put(frame)
+            else:
+                # Queue full, wait a bit to avoid busy loop
+                time.sleep(0.01)
+        self.cap.release()
+
+    def read(self):
+        """Get the next frame from the buffer."""
+        if not self.queue.empty():
+            return True, self.queue.get()
+        return False, None
+
+    def ready(self):
+        """Check if buffer is sufficiently filled to start/resume playback."""
+        # Consider ready if we have at least 'buffer_size' frames 
+        # OR if the stream has stopped (so we drain the remaining frames)
+        return self.queue.qsize() >= self.buffer_size or not self.running
+
+    def stop(self):
+        """Stop the thread and cleanup."""
+        self.running = False
+        if self.thread:
+            self.thread.join()
+
+# =============================================================================
 # YOLO Detection Loop
 # =============================================================================
 
-def run_yolo(stream_url: str) -> None:
+def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS) -> None:
     """
     Run real-time YOLO bus detection on a video stream.
     
-    Opens the stream, loads the bus detection model, and processes frames
-    in a loop. Uses frame skipping to reduce computational load - only
-    runs inference every PROCESS_EVERY_N_FRAMES frames, displaying the
-    last annotated frame for skipped frames (buffering).
-    
     Args:
-        stream_url: Direct URL to video stream (HLS or other OpenCV-compatible format)
+        stream_url: Direct URL to video stream
+        buffer_seconds: Seconds of video to buffer before playback
     """
-    # Open video stream
-    cap = cv2.VideoCapture(stream_url)
+    print(f"Starting YOLO with {buffer_seconds}s buffer...")
 
-    if not cap.isOpened():
-        print("Stream ei auennut:", stream_url)  # "Stream didn't open:"
+    # Initialize stream buffer
+    try:
+        stream = StreamBuffer(stream_url, buffer_seconds)
+    except RuntimeError as e:
+        print(e)
         return
+
+    stream.start()
 
     print("YOLO käynnistyy...")  # "YOLO starting..."
 
@@ -101,13 +179,31 @@ def run_yolo(stream_url: str) -> None:
     frame_count = 0            # Frame counter for skipping logic
     last_annotated = None      # Buffered annotated frame for smooth display
     prev_time = 0              # For FPS calculation
+    
+    # Pre-buffering phase
+    print("Buffering stream...")
+    while not stream.ready():
+        time.sleep(0.1)
+        sys.stdout.write(f"\rBuffering: {stream.queue.qsize()}/{stream.buffer_size} frames")
+        sys.stdout.flush()
+    print("\nPlayback starting!")
 
     # Main processing loop
     while True:
-        ret, frame = cap.read()
+        # Read from buffer
+        ret, frame = stream.read()
+        
         if not ret:
-            # Frame read failed (stream hiccup) - try next frame
-            continue
+            # Buffer empty or stream ended
+            if not stream.running:
+                print("Stream ended.")
+                break
+            else:
+                # Buffer underrun - wait briefly
+                # Ideally unrelated to network since 'read' is fast from queue
+                # But if queue is empty, we must wait
+                time.sleep(0.001) 
+                continue
 
         frame_count += 1
 
@@ -160,7 +256,7 @@ def run_yolo(stream_url: str) -> None:
             break
 
     # Cleanup
-    cap.release()
+    stream.stop()
     cv2.destroyAllWindows()
 
 
@@ -168,7 +264,18 @@ def run_yolo(stream_url: str) -> None:
 # Entry Point
 # =============================================================================
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Real-time bus detection on Torikamera")
+    parser.add_argument(
+        "--buffer", 
+        type=int, 
+        default=DEFAULT_BUFFER_SECONDS,
+        help=f"Buffer size in seconds (default: {DEFAULT_BUFFER_SECONDS})"
+    )
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    args = parse_args()
     stream_url = get_stream_url(YOUTUBE_URL)
     if stream_url:
-        run_yolo(stream_url)
+        run_yolo(stream_url, args.buffer)
