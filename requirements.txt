@@ -4,3 +4,4 @@ pytest
 requests
 streamlink
 ultralytics
+yt-dlp
