@@ -38,7 +38,7 @@ BUS_CONFIDENCE_THRESHOLD = 0.70
 BUS_MODEL_PATH = "models/best.pt"
 
 # Path to YOLOv8 nano model (general object detection)
-#BUS_MODEL_PATH = "yolov8n.pt"
+STOCK_MODEL_PATH = "yolov8n.pt"
 
 # Default buffer size in seconds
 DEFAULT_BUFFER_SECONDS = 5
@@ -178,13 +178,15 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
 
     print("YOLO käynnistyy...")  # "YOLO starting..."
 
-    # Load custom-trained bus detection model
+    # Load models
     bus_model = YOLO(BUS_MODEL_PATH)
+    stock_model = YOLO(STOCK_MODEL_PATH)
 
     # State tracking
     last_bus = False           # Was a bus detected in the previous processed frame?
     frame_count = 0            # Frame counter for skipping logic
-    last_annotated = None      # Buffered annotated frame for smooth display
+    last_annotated_bus = None  # Buffered annotated frame for bus model
+    last_annotated_stock = None # Buffered annotated frame for stock model
     prev_time = time.time()    # For FPS calculation
     fps_history = deque()      # Store timestamps for 3-second moving average
     
@@ -216,8 +218,9 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
         frame_count += 1
 
         # Only run YOLO inference on every Nth frame for performance
+        # Only run YOLO inference on every Nth frame for performance
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
-            # Run bus detection
+            # --- Bus Model Inference ---
             bus_results = bus_model(frame, conf=BUS_CONFIDENCE_THRESHOLD)
             
             # Check if any bus was detected
@@ -236,11 +239,16 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
             last_bus = bus_detected
 
             # Create annotated frame with detection boxes
-            last_annotated = bus_results[0].plot()
+            last_annotated_bus = bus_results[0].plot()
 
-        # Prepare display frame
-        # Use copy to avoid over-drawing FPS on the buffered 'last_annotated' frame
-        display_frame = (last_annotated if last_annotated is not None else frame).copy()
+            # --- Stock Model Inference ---
+            stock_results = stock_model(frame)
+            last_annotated_stock = stock_results[0].plot()
+
+        # Prepare display frames
+        # Use copy to avoid over-drawing FPS on the buffered 'last_annotated' frames
+        display_frame_bus = (last_annotated_bus if last_annotated_bus is not None else frame).copy()
+        display_frame_stock = (last_annotated_stock if last_annotated_stock is not None else frame).copy()
 
         # Calculate and draw FPS with 3-second smoothing
         curr_time = time.time()
@@ -258,28 +266,30 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
         else:
             fps = 0
 
-        cv2.putText(
-            display_frame, 
-            f"FPS: {int(fps)}", 
-            (10, 50), 
-            cv2.FONT_HERSHEY_SIMPLEX, 
-            2, 
-            (255, 0, 0), 
-            3
-        )
-        
-        # Show source type (local file vs live stream)
-        cv2.putText(
-            display_frame,
-            source_label,
-            (10, 100),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 255) if is_local_file else (0, 255, 0),
-            2
-        )
+        # Draw overlays on BOTH windows
+        for frame_to_draw, window_name in [(display_frame_bus, "Torikamera Bus YOLO"), (display_frame_stock, "Torikamera Stock YOLO")]:
+            cv2.putText(
+                frame_to_draw, 
+                f"FPS: {int(fps)}", 
+                (10, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                2, 
+                (255, 0, 0), 
+                3
+            )
+            
+            # Show source type (local file vs live stream)
+            cv2.putText(
+                frame_to_draw,
+                source_label,
+                (10, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 255) if is_local_file else (0, 255, 0),
+                2
+            )
 
-        cv2.imshow("Torikamera YOLO", display_frame)
+            cv2.imshow(window_name, frame_to_draw)
 
         # Check for ESC key (keycode 27) to exit
         if cv2.waitKey(1) == 27:
