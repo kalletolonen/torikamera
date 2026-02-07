@@ -3,3 +3,4 @@ yt-dlp
 pytest
 requests
 streamlink
+ultralytics
