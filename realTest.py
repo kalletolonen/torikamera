@@ -32,10 +32,13 @@ YOUTUBE_URL = "https://www.youtube.com/watch?v=F7SDNtc5waU"
 PROCESS_EVERY_N_FRAMES = 2
 
 # Detection confidence threshold for bus model
-BUS_CONFIDENCE_THRESHOLD = 0.10
+BUS_CONFIDENCE_THRESHOLD = 0.70
 
 # Path to custom-trained bus detection model
 BUS_MODEL_PATH = "models/best.pt"
+
+# Path to YOLOv8 nano model (general object detection)
+#BUS_MODEL_PATH = "yolov8n.pt"
 
 # Default buffer size in seconds
 DEFAULT_BUFFER_SECONDS = 5
