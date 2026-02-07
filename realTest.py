@@ -13,6 +13,7 @@ for skipped frames (buffering for smooth playback).
 import cv2
 import time
 import yt_dlp
+from collections import deque
 from ultralytics import YOLO
 
 import argparse
@@ -28,7 +29,7 @@ YOUTUBE_URL = "https://www.youtube.com/watch?v=F7SDNtc5waU"
 
 # Frame skipping: Only run YOLO inference on every Nth frame
 # Higher values = less lag but lower detection responsiveness
-PROCESS_EVERY_N_FRAMES = 1
+PROCESS_EVERY_N_FRAMES = 2
 
 # Detection confidence threshold for bus model
 BUS_CONFIDENCE_THRESHOLD = 0.10
@@ -181,7 +182,8 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
     last_bus = False           # Was a bus detected in the previous processed frame?
     frame_count = 0            # Frame counter for skipping logic
     last_annotated = None      # Buffered annotated frame for smooth display
-    prev_time = 0              # For FPS calculation
+    prev_time = time.time()    # For FPS calculation
+    fps_history = deque()      # Store timestamps for 3-second moving average
     
     # Pre-buffering phase
     print("Buffering stream...")
@@ -237,11 +239,22 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
         # Use copy to avoid over-drawing FPS on the buffered 'last_annotated' frame
         display_frame = (last_annotated if last_annotated is not None else frame).copy()
 
-        # Calculate and draw FPS
+        # Calculate and draw FPS with 3-second smoothing
         curr_time = time.time()
-        fps = 1 / (curr_time - prev_time) if prev_time > 0 else 0
-        prev_time = curr_time
+        fps_history.append(curr_time)
         
+        # Remove timestamps older than 3 seconds
+        while fps_history and fps_history[0] < curr_time - 3.0:
+            fps_history.popleft()
+            
+        # Calculate smoothed FPS
+        # FPS = (number of frames - 1) / (time difference between first and last frame)
+        if len(fps_history) > 1:
+            duration = fps_history[-1] - fps_history[0]
+            fps = (len(fps_history) - 1) / duration if duration > 0 else 0
+        else:
+            fps = 0
+
         cv2.putText(
             display_frame, 
             f"FPS: {int(fps)}", 
