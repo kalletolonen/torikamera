@@ -52,7 +52,6 @@ We rip the live stream directly to getting training data.
    ```
 
    _Arguments:_
-
    - `--limit`: Number of frames to capture.
    - `--interval`: Seconds between frames (Live mode only).
    - `--history`: Hours ago to extract from (e.g., `6.0` for 6 hours ago). Accepts multiple values.
@@ -79,3 +78,5 @@ The core logic for scraping is in `get_data.py`.
 - **Buffering Timeouts**: If the script is stuck on "Waiting for video to buffer", it will automatically reload the page after 30 seconds and retry.
 - **Black Frames**: If frames are ~20KB and black, it means the stream hadn't loaded. Rerun the script for that specific hour offset.
 - **Headless Issues**: If extraction fails, try running non-headless (modify `get_data.py` `headless=False`) to see what the browser is doing.
+
+AI was used in the creation of this project.
