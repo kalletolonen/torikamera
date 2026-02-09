@@ -218,7 +218,6 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
         frame_count += 1
 
         # Only run YOLO inference on every Nth frame for performance
-        # Only run YOLO inference on every Nth frame for performance
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
             # --- Bus Model Inference ---
             bus_results = bus_model(frame, conf=BUS_CONFIDENCE_THRESHOLD)
