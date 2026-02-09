@@ -62,6 +62,12 @@ We rip the live stream directly to getting training data.
 
 ## Project Maintenance and Future Use
 
+### Training the yolo with proprietary data
+
+```
+yolo detect train data=data.yaml model=yolov8n.pt epochs=50 imgsz=640
+```
+
 ### Modifying the Script
 
 The core logic for scraping is in `get_data.py`.
