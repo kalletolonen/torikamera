@@ -64,6 +64,8 @@ We rip the live stream directly to getting training data.
 
 ### Training the yolo with proprietary data
 
+This should be run in the venv, that's in the data directory.
+
 ```
 yolo detect train data=data.yaml model=yolov8n.pt epochs=50 imgsz=640
 ```
