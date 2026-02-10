@@ -32,7 +32,7 @@ YOUTUBE_URL = "https://www.youtube.com/watch?v=F7SDNtc5waU"
 PROCESS_EVERY_N_FRAMES = 2
 
 # Detection confidence threshold for bus model
-BUS_CONFIDENCE_THRESHOLD = 0.70
+BUS_CONFIDENCE_THRESHOLD = 0.80
 
 # Path to custom-trained bus detection model
 BUS_MODEL_PATH = "models/best.pt"
@@ -220,7 +220,7 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
         # Only run YOLO inference on every Nth frame for performance
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
             # --- Bus Model Inference ---
-            bus_results = bus_model(frame, conf=BUS_CONFIDENCE_THRESHOLD)
+            bus_results = bus_model(frame, conf=BUS_CONFIDENCE_THRESHOLD, verbose=False)
             
             # Check if any bus was detected
             bus_detected = any(
@@ -228,20 +228,11 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
                 for box in bus_results[0].boxes
             )
 
-            # Print detection status
-            print(f"Bussi: {'KYLLÄ' if bus_detected else 'ei'}")  # "Bus: YES/no"
-
-            # Notify when a new bus enters the frame
-            if bus_detected and not last_bus:
-                print("🚌 UUSI BUSSI TULI KUVAAN")  # "NEW BUS ENTERED FRAME"
-
-            last_bus = bus_detected
-
             # Create annotated frame with detection boxes
             last_annotated_bus = bus_results[0].plot()
 
             # --- Stock Model Inference ---
-            stock_results = stock_model(frame)
+            stock_results = stock_model(frame, verbose=False)
             last_annotated_stock = stock_results[0].plot()
 
         # Prepare display frames
@@ -266,7 +257,7 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
             fps = 0
 
         # Draw overlays on BOTH windows
-        for frame_to_draw, window_name in [(display_frame_bus, "Torikamera Bus YOLO"), (display_frame_stock, "Torikamera Stock YOLO")]:
+        for frame_to_draw, window_name in [(display_frame_bus, "Torikamera Transfer Learned YOLO"), (display_frame_stock, "Torikamera Stock YOLO")]:
             cv2.putText(
                 frame_to_draw, 
                 f"FPS: {int(fps)}", 
