@@ -51,10 +51,17 @@ We rip the live stream directly to getting training data.
    python get_data.py --history 6.0 12.0 --limit 10
    ```
 
+   **Historical Data — spaced frames (e.g. 50 frames, 30 s apart, from 6 h ago):**
+
+   ```bash
+   python get_data.py --history 6.0 --limit 50 --frame_step 30
+   ```
+
    _Arguments:_
    - `--limit`: Number of frames to capture.
    - `--interval`: Seconds between frames (Live mode only).
    - `--history`: Hours ago to extract from (e.g., `6.0` for 6 hours ago). Accepts multiple values.
+   - `--frame_step`: Seconds to advance between frames in History mode (default: `0.2`). Use `30` for one frame every 30 seconds.
 
 **Output**: High-quality Full-HD JPGs in `data/raw/` (approx 150KB-200KB each).
 
@@ -84,6 +91,7 @@ The core logic for scraping is in `get_data.py`.
 ### Troubleshooting
 
 - **Buffering Timeouts**: If the script is stuck on "Waiting for video to buffer", it will automatically reload the page after 30 seconds and retry.
+- **"Something went wrong" Player Crash**: When using large `--frame_step` values, YouTube's player can crash mid-capture (readyState drops to 0). The script detects this automatically, reloads the page, and re-seeks to the correct timestamp to continue. Affected frames print `"player stalled/crashed. Reloading page and re-seeking..."`.
 - **Black Frames**: If frames are ~20KB and black, it means the stream hadn't loaded. Rerun the script for that specific hour offset.
 - **Headless Issues**: If extraction fails, try running non-headless (modify `get_data.py` `headless=False`) to see what the browser is doing.
 
