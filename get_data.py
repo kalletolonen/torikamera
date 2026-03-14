@@ -33,7 +33,7 @@ def get_dynamic_youtube_url(base_url="https://torilive.fi"):
             print("Could not find app.js script in HTML.")
             return None
         
-        js_path = match_js.group(1).rstrip('"\'>') # Clean up any trailing quote/bracket if greedy
+        js_path = match_js.group(1).rstrip('"\'>')  # Clean up any trailing quote/bracket if greedy
         
         js_path = match_js.group(1)
         js_url = urljoin(base_url, js_path)
@@ -81,7 +81,7 @@ def get_stream_url(url):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            return info['url'], url # Return both stream URL and the resolved YouTube URL
+            return info['url'], url  # Return both stream URL and the resolved YouTube URL
     except Exception as e:
         print(f"Error extracting stream URL: {e}", file=sys.stderr)
         return None, url
@@ -132,272 +132,272 @@ def extract_frames_live(stream_url, limit, interval, output_dir):
 
 from playwright.sync_api import sync_playwright
 
-def extract_frames_history(youtube_url, history_hours, limit, duration, output_dir):
+
+def _setup_page(page, youtube_url):
+    """
+    Navigates to youtube_url, handles cookie popups, injects Nuclear CSS to
+    remove all overlays, and waits until the video element is ready.
+    Call this on initial load and any time the player needs a full reset.
+    """
+    print(f"Navigating to {youtube_url}...")
+    page.goto(youtube_url)
+    time.sleep(5)
+
+    # Dynamic Popup Killer
+    print("Scanning for popups...")
+    try:
+        buttons = page.locator("button").all()
+        for btn in buttons:
+            try:
+                if not btn.is_visible():
+                    continue
+                txt = btn.inner_text().lower()
+                if "reject" in txt or "hylkää" in txt or "google" in txt:
+                    print(f"Clicking button with text: '{txt}'")
+                    btn.click()
+                    time.sleep(2)
+                    break
+            except:
+                pass
+    except Exception as e:
+        print(f"Popup scan error: {e}")
+
+    # Press ESC just in case of other overlays
+    page.keyboard.press("Escape")
+    time.sleep(0.5)
+
+    # Force Play if paused
+    try:
+        if page.locator("button.ytp-play-button[title^='Play']").is_visible(timeout=1000):
+            print("Starting video...")
+            page.keyboard.press("k")  # Toggle play
+    except:
+        pass
+
+    # Wait for video element
+    print("Waiting for video element...")
+    page.wait_for_selector("video", timeout=30000)
+
+    # INJECT "NUCLEAR" CSS LOOP — make player fullscreen, hide all UI
+    print("Applying Nuclear CSS Loop to remove all overlays...")
+    page.evaluate("""
+        const interval = setInterval(() => {
+            // 0. RESET PAGE
+            document.documentElement.style.margin = '0';
+            document.documentElement.style.padding = '0';
+            document.documentElement.style.background = '#000';
+            document.body.style.margin = '0';
+            document.body.style.padding = '0';
+            document.body.style.background = '#000';
+            document.body.style.overflow = 'hidden';
+
+            // 1. Maximize Player Container
+            const player = document.querySelector('#movie_player');
+            if (player) {
+                player.style.position = 'fixed !important';
+                player.style.top = '0px !important';
+                player.style.left = '0px !important';
+                player.style.width = '100vw !important';
+                player.style.height = '100vh !important';
+                player.style.zIndex = '2147483647 !important';
+                player.style.background = '#000';
+                player.style.margin = '0 !important';
+                player.style.padding = '0 !important';
+            }
+
+            // 2. Maximize Video Element
+            const video = document.querySelector('video');
+            if (video) {
+                video.style.objectFit = 'cover';
+                video.style.width = '100vw !important';
+                video.style.height = '100vh !important';
+                video.style.top = '0px !important';
+                video.style.left = '0px !important';
+            }
+
+            // 3. Hide surrounding page elements
+            const selectorsToHide = [
+                'ytd-masthead', '#masthead-container', '#secondary', '#guide',
+                '#comments', '#related', 'ytd-watch-next-secondary-results-renderer',
+                'div#placeholder-player', '#below', 'ytd-merch-shelf-renderer',
+                'ytd-player-legacy-desktop-watch-ads-renderer', '#chat'
+            ];
+            selectorsToHide.forEach(sel => {
+                document.querySelectorAll(sel).forEach(el => el.style.display = 'none');
+            });
+
+            // 4. Hide Player Internal Overlays
+            if (!document.getElementById('nuclear-style')) {
+                const style = document.createElement('style');
+                style.id = 'nuclear-style';
+                style.textContent = `
+                    .ytp-chrome-top, .ytp-chrome-bottom,
+                    .ytp-gradient-top, .ytp-gradient-bottom,
+                    .ytp-watermark, .ytp-ce-element,
+                    .ytp-hover-progress, .ytp-bezel,
+                    .ytp-spinner, .ytp-ad-overlay-container,
+                    .annotation, .iv-module,
+                    .ytp-paid-content-overlay,
+                    .ytp-suggested-action,
+                    button.ytp-button.ytp-cards-button,
+                    .ytp-pause-overlay
+                    { display: none !important; }
+                `;
+                document.head.appendChild(style);
+            }
+        }, 100);
+    """)
+
+    # Give the CSS loop a moment to win
+    time.sleep(2)
+
+    try:
+        page.evaluate("if(document.querySelector('#movie_player')) document.querySelector('#movie_player').classList.add('ytp-autohide')")
+    except:
+        pass
+
+    # Wait until video duration is known (player fully loaded)
+    page.wait_for_function("document.querySelector('video') && !isNaN(document.querySelector('video').duration)")
+    time.sleep(2)
+
+
+def _wait_for_buffer(page, frame_idx, timeout_seconds=30):
+    """
+    Polls video.readyState until >= 3 (HAVE_FUTURE_DATA) or timeout.
+    Returns True if buffered successfully, False on timeout.
+    """
+    time.sleep(0.3)
+    attempts = int(timeout_seconds / 0.5)
+    for _ in range(attempts):
+        try:
+            rs = page.evaluate("document.querySelector('video').readyState")
+            if rs >= 3:
+                return True
+            print(f"  Frame {frame_idx}: buffering... readyState={rs}")
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def extract_frames_history(youtube_url, history_hours, limit, duration, output_dir, frame_step=0.2):
     """
     Uses Playwright to capture frames from the YouTube player by seeking.
     This bypasses API restrictions by acting as a real user.
+
+    Robustly handles YouTube "Something went wrong" player crashes mid-capture
+    by detecting readyState=0 timeout and doing a full page reload + re-seek.
     """
     print(f"Starting HISTORY capture via Browser. Offsets: {history_hours} hours ago.")
-    
+
     with sync_playwright() as p:
-        # Launch browser (headless=True by default)
         browser = p.chromium.launch()
-        # Set viewport to 1080p for HD capture
         page = browser.new_page(viewport={"width": 1920, "height": 1080})
-        
-        # Go to video directly (Embed blocked by overlays/consent often)
-        print(f"Navigating to {youtube_url}...")
-        page.goto(youtube_url)
-        
-        # Wait a bit for page load
-        time.sleep(5)
-        
-        # Dynamic Popup Killer
-        print("Scanning for popups...")
-        try:
-             buttons = page.locator("button").all()
-             for btn in buttons:
-                 try:
-                     if not btn.is_visible(): continue
-                     txt = btn.inner_text().lower()
-                     if "reject" in txt or "hylkää" in txt or "google" in txt: 
-                         print(f"Clicking button with text: '{txt}'")
-                         btn.click()
-                         time.sleep(2)
-                         break
-                 except:
-                     pass
-        except Exception as e:
-             print(f"Popup scan error: {e}")
 
-        # Press ESC just in case of other overlays
-        page.keyboard.press("Escape")
-        time.sleep(0.5)
+        # Full page setup
+        _setup_page(page, youtube_url)
 
-        # Force Play if paused
-        try:
-             if page.locator("button.ytp-play-button[title^='Play']").is_visible(timeout=1000):
-                 print("Starting video...")
-                 page.keyboard.press("k") # Toggle play
-        except:
-             pass
-
-        # Wait for video element
-        print("Waiting for video element...")
-        page.wait_for_selector("video", timeout=30000)
-        
-        # INJECT "NUCLEAR" CSS LOOP TO MAKE PLAYER FULLSCREEN AND HIDE ALL UI
-        # We use a loop because YouTube loves to re-render elements.
-        print("Applying Nuclear CSS Loop to remove all overlays...")
-        page.evaluate("""
-            const interval = setInterval(() => {
-                // 0. RESET PAGE
-                document.documentElement.style.margin = '0';
-                document.documentElement.style.padding = '0';
-                document.documentElement.style.background = '#000';
-                document.body.style.margin = '0';
-                document.body.style.padding = '0';
-                document.body.style.background = '#000';
-                document.body.style.overflow = 'hidden';
-                
-                // 1. Maximize Player Container
-                const player = document.querySelector('#movie_player');
-                if (player) {
-                    player.style.position = 'fixed !important';
-                    player.style.top = '0px !important';
-                    player.style.left = '0px !important';
-                    player.style.width = '100vw !important';
-                    player.style.height = '100vh !important';
-                    player.style.zIndex = '2147483647 !important';
-                    player.style.background = '#000';
-                    player.style.margin = '0 !important';
-                    player.style.padding = '0 !important';
-                }
-
-                // 2. Maximize Video Element (Fixes white frame/letterboxing)
-                const video = document.querySelector('video');
-                if (video) {
-                    video.style.objectFit = 'cover'; // or 'contain' if they want full video without crop, but 'cover' removes black/white bars
-                    video.style.width = '100vw !important';
-                    video.style.height = '100vh !important';
-                    video.style.top = '0px !important';
-                    video.style.left = '0px !important';
-                }
-                
-                // 3. Hide surrounding page elements
-                const selectorsToHide = [
-                    'ytd-masthead', 
-                    '#masthead-container',
-                    '#secondary', 
-                    '#guide', 
-                    '#comments', 
-                    '#related',
-                    'ytd-watch-next-secondary-results-renderer',
-                    'div#placeholder-player',
-                    '#below',
-                    'ytd-merch-shelf-renderer',
-                    'ytd-player-legacy-desktop-watch-ads-renderer',
-                    '#chat' 
-                ];
-                selectorsToHide.forEach(sel => {
-                    const els = document.querySelectorAll(sel);
-                    els.forEach(el => el.style.display = 'none');
-                });
-
-                // 3. Hide Player Internal Overlays (Controls, Gradients, Title)
-                // We restart this check in case DOM changes
-                if (!document.getElementById('nuclear-style')) {
-                    const style = document.createElement('style');
-                    style.id = 'nuclear-style';
-                    style.textContent = `
-                        .ytp-chrome-top, .ytp-chrome-bottom, 
-                        .ytp-gradient-top, .ytp-gradient-bottom,
-                        .ytp-watermark, .ytp-ce-element,
-                        .ytp-hover-progress, .ytp-bezel,
-                        .ytp-spinner, .ytp-ad-overlay-container,
-                        .annotation, .iv-module,
-                        .ytp-paid-content-overlay,
-                        .ytp-suggested-action,
-                        button.ytp-button.ytp-cards-button,
-                        .ytp-pause-overlay
-                        { display: none !important; }
-                    `;
-                    document.head.appendChild(style);
-                }
-            }, 100);
-        """)
-        
-        # Give the loop a moment to win
-        time.sleep(2)
-        
-        # Ensure controls are hidden interaction-wise too
-        try:
-            page.evaluate("if(document.querySelector('#movie_player')) document.querySelector('#movie_player').classList.add('ytp-autohide')")
-        except:
-            pass
-
-        # Get live duration/latency info to calculate absolute seek time?
-        # Actually, for live streams, 'seekTo' works with 'seconds from START of event' or similar?
-        # Or does it support negative offset from live?
-        # YouTube Player API: player.seekTo(seconds, allowSeekAhead).
-        # For live streams, seekTo seeks to a time relative to the stream start.
-        # We need to know the 'duration' or 'current time' of the live stream to subtract.
-        # Video element 'duration' attribute is often just the buffer or huge number.
-        # Calling 'player.getDuration()' returns duration of video (or elapsed time of live stream?).
-        # 'player.getCurrentTime()' returns time since stream start.
-        
-        # Let's get current player time first.
-        # Ensure player is loaded.
-        page.wait_for_function("document.querySelector('video') && !isNaN(document.querySelector('video').duration)")
-
-        # Ensure we are 'live' to establish baseline or just read the current time.
-        # It's safest to assume the page load puts us at 'live edge' ish.
-        # Wait a sec for buffer
-        time.sleep(2)
-        
+        # Establish live edge baseline
         live_time = page.evaluate("document.querySelector('video').currentTime")
         print(f"Current Stream Time (Live Edge approx): {live_time}s")
-        
+
         for hours_ago in history_hours:
             print(f"--- Processing: {hours_ago} hours ago ---")
-             
-            # Calculate target time in seconds
+
             seek_seconds_back = float(hours_ago) * 3600
-            target_time = max(0, live_time - seek_seconds_back)
-            
-            # REFRESH LOGIC: If we are deep seeking, sometimes a fresh page load helps.
-            # But let's try seek first. If it fails, we reload and retry.
-            
+            base_target_time = max(0, live_time - seek_seconds_back)
+
+            # --- Initial seek to the window start ---
             MAX_RETRIES = 2
+            buffered = False
             for attempt in range(MAX_RETRIES):
-                print(f"Seeking to {target_time}s (Live - {seek_seconds_back}s)... Attempt {attempt+1}")
-                
-                # Seek
-                page.evaluate(f"document.querySelector('video').currentTime = {target_time}")
-                
-                # Wait for buffering with retry
+                print(f"Seeking to {base_target_time}s (Live - {seek_seconds_back}s)... Attempt {attempt + 1}")
+                page.evaluate(f"document.querySelector('video').currentTime = {base_target_time}")
+
                 print("Waiting for video to buffer...")
-                buffered = False
-                for _ in range(15): # Try for 30 seconds
+                for _ in range(15):  # up to 30s
                     time.sleep(2)
                     try:
                         rs = page.evaluate("document.querySelector('video').readyState")
-                        if rs >= 3: # HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
+                        if rs >= 3:
                             buffered = True
                             print(f"Buffered! ReadyState: {rs}")
                             break
                         else:
-                             print(f"Still buffering... ReadyState: {rs}")
-                             # Try nudging play if stuck
-                             if rs == 0:
-                                 page.mouse.click(960, 540)
+                            print(f"Still buffering... ReadyState: {rs}")
+                            if rs == 0:
+                                page.mouse.click(960, 540)
                     except:
                         pass
-                
+
                 if buffered:
                     break
                 else:
-                    print("Warning: Buffering timed out.")
+                    print("Warning: Initial buffering timed out.")
                     if attempt < MAX_RETRIES - 1:
                         print("Reloading page to clear stalled buffer...")
-                        page.reload()
-                        # Re-run popup and CSS logic
-                        time.sleep(5)
-                        # ... (We'd need to re-run the whole setup logic here, which is messy in a loop)
-                        # Simplified: Just try seeking again, maybe jump a bit?
-                        # Actually, better to just accept it or warn.
-                        # Let's try attempting to seek a bit forward?
-                        target_time += 10
-                        print(f"Retrying seek 10s forward: {target_time}")
-            
-            # Debug ready state
+                        _setup_page(page, youtube_url)
+                        # Recalculate live_time after reload; stream may have advanced
+                        live_time = page.evaluate("document.querySelector('video').currentTime")
+                        base_target_time = max(0, live_time - seek_seconds_back)
+
             ready_state = page.evaluate("document.querySelector('video').readyState")
             print(f"Video ReadyState: {ready_state} (4=HAVE_ENOUGH_DATA)")
 
-            # Approximate timestamp for filename
             td = timedelta(hours=hours_ago)
             past_time = datetime.now() - td
             timestamp_str = past_time.strftime("%Y%m%d_%H%M%S")
-            
-            # Capture frames
-            # We can advance explicitly by frame interval
-            # But 'seek' might buffer. We should wait for 'seeking' to be false?
-            
+
+            # --- Per-frame capture loop ---
             for i in range(limit):
-                # Wait for buffer (simple sleep for hackiness, better: check readyState)
-                time.sleep(1.0) 
-                
-                # Check if stalled/buffering?
-                # For now just screenshot.
-                
+                # Absolute seek target for this frame
+                frame_target_time = base_target_time + (i * frame_step)
+
+                # Seek (skip on frame 0 — already there from initial seek)
+                if i > 0:
+                    page.evaluate(f"document.querySelector('video').currentTime = {frame_target_time}")
+
+                # Wait for buffer
+                ok = _wait_for_buffer(page, i, timeout_seconds=30)
+
+                if not ok:
+                    # Player crashed ("Something went wrong") — reload and re-seek
+                    print(f"  Frame {i}: player stalled/crashed. Reloading page and re-seeking...")
+                    _setup_page(page, youtube_url)
+
+                    # After reload, live edge may have shifted slightly; adjust accordingly
+                    new_live_time = page.evaluate("document.querySelector('video').currentTime")
+                    shift = new_live_time - live_time
+                    adjusted_target = frame_target_time + shift
+                    print(f"  Re-seeking to {adjusted_target}s (shift: {shift:+.1f}s)...")
+                    page.evaluate(f"document.querySelector('video').currentTime = {adjusted_target}")
+
+                    ok = _wait_for_buffer(page, i, timeout_seconds=30)
+                    if not ok:
+                        print(f"  Frame {i}: still not buffered after reload. Skipping frame.")
+                        continue
+
                 filename = os.path.join(output_dir, f"torikamera_{timestamp_str}_h{int(hours_ago)}h_f{i}.jpg")
-                
-                # Screenshot ONLY the video element to avoid any page borders
                 page.locator("video").screenshot(path=filename)
-                
                 print(f"Saved {filename}")
-                
-                # Advance 1 second? or small step?
-                # Limit implies frames, usually consecutive? or spaced?
-                # Original script used whole video clip. Here we take snapshots.
-                # Let's advance 0.2s
-                page.evaluate("document.querySelector('video').currentTime += 0.2")
 
         browser.close()
+
 
 def main():
     parser = argparse.ArgumentParser(description="Torkamera Stream Ripper")
     parser.add_argument("--url", default="https://torilive.fi/", help="URL of the stream source")
-    parser.add_argument("--limit", type=int, default=5, help="Number of frames to capture") # Default lowered for browser
+    parser.add_argument("--limit", type=int, default=5, help="Number of frames to capture")  # Default lowered for browser
     parser.add_argument("--interval", type=int, default=5, help="Seconds between captures (Live mode)")
     parser.add_argument("--output", default="data/raw", help="Directory to save frames")
-    
+
     # Time Travel Arguments
     parser.add_argument("--history", type=float, nargs='+', help="List of hour offsets to scrape from past (e.g. 0.5 2 12)")
     parser.add_argument("--duration", type=int, default=10, help="Ignored in Browser Mode")
-    
+    parser.add_argument("--frame_step", type=float, default=0.2, help="Seconds to advance between frames in history mode (default: 0.2)")
+
     args = parser.parse_args()
-    
+
     if not os.path.exists(args.output):
         os.makedirs(args.output)
 
@@ -408,7 +408,7 @@ def main():
 
     if args.history:
         # History Mode (Browser)
-        extract_frames_history(youtube_url, args.history, args.limit, args.duration, args.output)
+        extract_frames_history(youtube_url, args.history, args.limit, args.duration, args.output, args.frame_step)
     else:
         # Live Mode (CV2)
         extract_frames_live(stream_url, args.limit, args.interval, args.output)
