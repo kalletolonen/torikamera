@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 4
+names: ['bus', 'car', 'delivery', 'two-wheeler']
+
+roboflow:
+  workspace: ai-project-tgcql
+  project: torikamera-ems
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/ai-project-tgcql/torikamera-ems/dataset/3

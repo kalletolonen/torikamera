@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 4
+names: ['bus', 'car', 'delivery', 'two-wheeler']
+
+roboflow:
+  workspace: hannas-workspace-p8qyr
+  project: torilive-4yiib
+  version: 1
+  license: Private
+  url: https://app.roboflow.com/hannas-workspace-p8qyr/torilive-4yiib/1
