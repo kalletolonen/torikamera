@@ -34,10 +34,10 @@ PROCESS_EVERY_N_FRAMES = 2
 # Per-class confidence thresholds for the custom model
 # Run inference at the lowest threshold, then filter per class
 CLASS_CONFIDENCE_THRESHOLDS = {
-    "bus":        0.50,
-    "car":        0.05,
-    "delivery":   0.05,
-    "two-wheels": 0.05,
+    "bus":        0.25,
+    "car":        0.25,
+    "delivery":   0.25,
+    "two-wheels": 0.25,
 }
 MIN_CONFIDENCE = min(CLASS_CONFIDENCE_THRESHOLDS.values())
 
@@ -268,7 +268,7 @@ def run_yolo(stream_url: str, model_path: str = BUS_MODEL_PATH, buffer_seconds: 
             fps = 0
 
         # Draw overlays on BOTH windows
-        for frame_to_draw, window_name in [(display_frame_bus, "Torikamera Transfer Learned YOLO"), (display_frame_stock, "Torikamera Stock YOLO")]:
+        for frame_to_draw, window_name in [(display_frame_bus, "Torikamera AI-Project YOLO"), (display_frame_stock, "Torikamera comparison YOLO")]:
             cv2.putText(
                 frame_to_draw, 
                 f"FPS: {int(fps)}", 
