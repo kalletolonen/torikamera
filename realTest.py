@@ -25,20 +25,27 @@ import sys
 # Configuration Constants
 # =============================================================================
 
-YOUTUBE_URL = "https://www.youtube.com/watch?v=F7SDNtc5waU"
+YOUTUBE_URL = "https://www.youtube.com/watch?v=KLQLeZ9vjt4"
 
 # Frame skipping: Only run YOLO inference on every Nth frame
 # Higher values = less lag but lower detection responsiveness
 PROCESS_EVERY_N_FRAMES = 2
 
-# Detection confidence threshold for bus model
-BUS_CONFIDENCE_THRESHOLD = 0.80
+# Per-class confidence thresholds for the custom model
+# Run inference at the lowest threshold, then filter per class
+CLASS_CONFIDENCE_THRESHOLDS = {
+    "bus":        0.50,
+    "car":        0.05,
+    "delivery":   0.05,
+    "two-wheels": 0.05,
+}
+MIN_CONFIDENCE = min(CLASS_CONFIDENCE_THRESHOLDS.values())
 
 # Path to custom-trained bus detection model
 BUS_MODEL_PATH = "models/best.pt"
 
 # Path to YOLOv8 nano model (general object detection)
-STOCK_MODEL_PATH = "yolov8n.pt"
+STOCK_MODEL_PATH = "models/best.pt"
 
 # Default buffer size in seconds
 DEFAULT_BUFFER_SECONDS = 5
@@ -154,17 +161,19 @@ class StreamBuffer:
 # YOLO Detection Loop
 # =============================================================================
 
-def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_local_file: bool = False) -> None:
+def run_yolo(stream_url: str, model_path: str = BUS_MODEL_PATH, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_local_file: bool = False) -> None:
     """
     Run real-time YOLO bus detection on a video stream.
     
     Args:
         stream_url: Direct URL to video stream
+        model_path: Path to the YOLO model to use
         buffer_seconds: Seconds of video to buffer before playback
         is_local_file: True if using local file, False if using live stream
     """
     source_label = "LOCAL FILE" if is_local_file else "LIVE STREAM"
     print(f"Source: {source_label}")
+    print(f"Using model: {model_path}")
     print(f"Starting YOLO with {buffer_seconds}s buffer...")
 
     # Initialize stream buffer
@@ -179,15 +188,13 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
     print("YOLO käynnistyy...")  # "YOLO starting..."
 
     # Load models
-    bus_model = YOLO(BUS_MODEL_PATH)
+    bus_model = YOLO(model_path)
     stock_model = YOLO(STOCK_MODEL_PATH)
 
     # State tracking
-    last_bus = False           # Was a bus detected in the previous processed frame?
     frame_count = 0            # Frame counter for skipping logic
     last_annotated_bus = None  # Buffered annotated frame for bus model
     last_annotated_stock = None # Buffered annotated frame for stock model
-    prev_time = time.time()    # For FPS calculation
     fps_history = deque()      # Store timestamps for 3-second moving average
     
     # Pre-buffering phase
@@ -219,17 +226,21 @@ def run_yolo(stream_url: str, buffer_seconds: int = DEFAULT_BUFFER_SECONDS, is_l
 
         # Only run YOLO inference on every Nth frame for performance
         if frame_count % PROCESS_EVERY_N_FRAMES == 0:
-            # --- Bus Model Inference ---
-            bus_results = bus_model(frame, conf=BUS_CONFIDENCE_THRESHOLD, verbose=False)
-            
-            # Check if any bus was detected
-            bus_detected = any(
-                bus_model.names[int(box.cls[0])] == "bus"
-                for box in bus_results[0].boxes
-            )
+            # --- Custom Model Inference ---
+            # Use the global minimum as the floor so all classes get a chance,
+            # then filter each box against its own per-class threshold.
+            bus_results = bus_model(frame, conf=MIN_CONFIDENCE, verbose=False)
 
-            # Create annotated frame with detection boxes
-            last_annotated_bus = bus_results[0].plot()
+            # Filter boxes: keep only those above their class-specific threshold
+            kept_indices = [
+                i for i, box in enumerate(bus_results[0].boxes)
+                if bus_model.names[int(box.cls[0])] in CLASS_CONFIDENCE_THRESHOLDS
+                and float(box.conf[0]) >= CLASS_CONFIDENCE_THRESHOLDS[bus_model.names[int(box.cls[0])]]
+            ]
+
+            # Create annotated frame showing only the filtered detections
+            filtered_result = bus_results[0][kept_indices]
+            last_annotated_bus = filtered_result.plot()
 
             # --- Stock Model Inference ---
             stock_results = stock_model(frame, verbose=False)
@@ -308,6 +319,12 @@ def parse_args():
         default=None,
         help="Path to video file to use instead of live stream"
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=BUS_MODEL_PATH,
+        help=f"Path to the YOLO model to use (default: {BUS_MODEL_PATH})"
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -316,9 +333,9 @@ if __name__ == "__main__":
     # Determine stream source: File or YouTube URL
     if args.source:
         print(f"Using local file as source: {args.source}")
-        run_yolo(args.source, 0, is_local_file=True)
+        run_yolo(args.source, args.model, 0, is_local_file=True)
     else:
         print("Using live stream from YouTube")
         stream_url = get_stream_url(YOUTUBE_URL)
         if stream_url:
-            run_yolo(stream_url, args.buffer, is_local_file=False)
+            run_yolo(stream_url, args.model, args.buffer, is_local_file=False)
